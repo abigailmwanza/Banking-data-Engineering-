@@ -14,11 +14,12 @@
 2. [Architecture](#2-architecture)
 3. [Data Modeling — From OLTP to OLAP](#3-data-modeling--from-oltp-to-olap)
 4. [Pipeline in Action](#4-pipeline-in-action)
-5. [Technology Choices](#5-technology-choices)
-6. [Tech Stack](#6-tech-stack)
-7. [Project Structure](#7-project-structure)
-8. [Getting Started](#8-getting-started)
-9. [Business Applications — Zambian Banking Sector](#9-business-applications--zambian-banking-sector)
+5. [CI/CD — Automated Testing & Deployment](#5-cicd--automated-testing--deployment)
+6. [Technology Choices](#6-technology-choices)
+7. [Tech Stack](#7-tech-stack)
+8. [Project Structure](#8-project-structure)
+9. [Getting Started](#9-getting-started)
+10. [Business Applications — Zambian Banking Sector](#10-business-applications--zambian-banking-sector)
 
 ---
 
@@ -48,7 +49,7 @@ This project fixes that problem. Here is what it does, in plain language:
 
 ## 2. Architecture
 
-![End-to-end architecture diagram of the banking data pipeline](<images/Architerture design.png>)
+![End-to-end architecture diagram of the banking data pipeline](<images/Architecture design.png>)
 
 *Visual overview — Postgres (with Faker as a generator) feeds Debezium, which streams CDC events into Kafka. A Python consumer lands them as Parquet in MinIO; Airflow orchestrates the `COPY INTO` load to Snowflake, dbt transforms the raw layer into marts, and Metabase renders the dashboards.*
 
@@ -224,7 +225,41 @@ The final layer is a self-service BI dashboard built in Metabase, connected dire
 
 ---
 
-## 5. Technology Choices
+## 5. CI/CD — Automated Testing & Deployment
+
+The pipeline isn't just orchestrated at runtime — the code that runs it is itself tested and deployed automatically. Two GitHub Actions workflows live in [.github/workflows/](.github/workflows/) and gate every change to the `dev` and `main` branches.
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| **CI** ([ci.yml](.github/workflows/ci.yml)) | `push` to `dev`/`main`, or `pull_request` into `main` | Spins up a Postgres 15 service, installs dependencies, runs `ruff` lint + `pytest`, then `dbt deps` and `dbt compile` against Snowflake to validate every model before merge |
+| **CD** ([cd.yml](.github/workflows/cd.yml)) | `push` to `main` only | Re-installs dbt, points at the `prod` target, and runs `dbt run` followed by `dbt test` so production marts are rebuilt and validated the moment a PR lands |
+
+### 5.1 CI — Pull Request Validation
+
+When a contributor opens a PR into `main`, the CI workflow runs the full validation suite. The PR cannot be merged until all checks pass — there's no path for a broken model or a failing test to reach `main`.
+
+![GitHub PR with all CI checks passing — tests on pull_request and push both successful](<images/CI Workflow.png>)
+
+*PR #1 (`dev` → `main`) — both `CI / tests (pull_request)` and `CI / tests (push)` finished in under a minute, "All checks have passed", no merge conflicts. Branch is safe to merge.*
+
+### 5.2 CD — Production Deployment on Merge
+
+Once the PR is merged, the CD workflow fires on the resulting `push` to `main`. It deploys the dbt project against the production Snowflake target — `dbt run` rebuilds the marts and `dbt test` validates them — so the warehouse is always in sync with `main`.
+
+![GitHub Actions runs list showing CD and CI workflows triggered on merge to main](images/CD.png)
+
+*Actions tab — five recent runs across both workflows. The two top runs (`Merge pull request #1 from abigailmwanza/dev`) are CI #4 and CD #1 firing back-to-back on the same merge commit, both green. CI also runs on every `dev` push so feedback comes before the PR is even opened.*
+
+### 5.3 Why this matters for a banking pipeline
+
+- **No untested SQL touches Snowflake.** `dbt compile` in CI catches a broken `ref()` or a column rename before it can break a downstream dashboard.
+- **Secrets stay out of the repo.** Snowflake account, user, password, and warehouse are injected from GitHub Secrets at run time — the same `profiles.yml` template renders for `dev` and `prod` targets.
+- **Auditable deployments.** Every change to a production mart is traceable to a merged PR, a green CI run, and a CD run on a specific commit — exactly the chain of custody a regulator expects.
+- **Fast feedback.** A push to `dev` runs the same lint + compile suite the PR will run, so contributors see failures in ~1 minute instead of waiting for review.
+
+---
+
+## 6. Technology Choices
 
 Each tool in the stack was chosen for a specific engineering reason.
 
@@ -245,7 +280,7 @@ Each tool in the stack was chosen for a specific engineering reason.
 
 ---
 
-## 6. Tech Stack
+## 7. Tech Stack
 
 **Languages:** Python 3.11, SQL
 **Data Platforms:** PostgreSQL 15, Snowflake
@@ -258,7 +293,7 @@ Each tool in the stack was chosen for a specific engineering reason.
 
 ---
 
-## 7. Project Structure
+## 8. Project Structure
 
 ```
 Banking-data-engineering/
@@ -275,7 +310,7 @@ Banking-data-engineering/
 
 ---
 
-## 8. Getting Started
+## 9. Getting Started
 
 ### Prerequisites
 - Docker Desktop
@@ -311,11 +346,11 @@ Open Metabase at `http://localhost:3000` and complete the first-run setup wizard
 
 ---
 
-## 9. Business Applications — Zambian Banking Sector
+## 10. Business Applications — Zambian Banking Sector
 
 This architecture addresses concrete operational and regulatory needs within Zambia's financial services industry — commercial banks (Zanaco, FNB Zambia, Stanbic, Absa Zambia, Indo-Zambia) and mobile money operators (MTN MoMo, Airtel Money, Zamtel Kwacha).
 
-### 9.1 Use Cases
+### 10.1 Use Cases
 
 | Use Case | Business Impact |
 |----------|-----------------|
@@ -330,7 +365,7 @@ This architecture addresses concrete operational and regulatory needs within Zam
 | **Core banking modernisation** | CDC-based data extraction from legacy cores (Flexcube, T24, Bankfusion) without impacting source systems — a low-risk modernisation pathway. |
 | **SME credit scoring** | Clean transaction history feeds into credit models, addressing the gap left by limited credit bureau coverage in the SME segment. |
 
-### 9.2 Why This Architecture Suits the Zambian Context
+### 10.2 Why This Architecture Suits the Zambian Context
 
 - **Resilient to low bandwidth** — Kafka buffering and MinIO batching tolerate intermittent connectivity between branches in remote provinces.
 - **Cost-efficient** — Self-hosted MinIO combined with Snowflake's pay-per-query pricing minimises upfront capital expenditure.
