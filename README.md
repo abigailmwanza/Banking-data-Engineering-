@@ -12,12 +12,13 @@
 
 1. [Overview](#1-overview)
 2. [Architecture](#2-architecture)
-3. [Pipeline in Action](#3-pipeline-in-action)
-4. [Technology Choices](#4-technology-choices)
-5. [Tech Stack](#5-tech-stack)
-6. [Project Structure](#6-project-structure)
-7. [Getting Started](#7-getting-started)
-8. [Business Applications — Zambian Banking Sector](#8-business-applications--zambian-banking-sector)
+3. [Data Modeling — From OLTP to OLAP](#3-data-modeling--from-oltp-to-olap)
+4. [Pipeline in Action](#4-pipeline-in-action)
+5. [Technology Choices](#5-technology-choices)
+6. [Tech Stack](#6-tech-stack)
+7. [Project Structure](#7-project-structure)
+8. [Getting Started](#8-getting-started)
+9. [Business Applications — Zambian Banking Sector](#9-business-applications--zambian-banking-sector)
 
 ---
 
@@ -47,6 +48,10 @@ This project fixes that problem. Here is what it does, in plain language:
 
 ## 2. Architecture
 
+![End-to-end architecture diagram of the banking data pipeline](<images/Architerture design.png>)
+
+*Visual overview — Postgres (with Faker as a generator) feeds Debezium, which streams CDC events into Kafka. A Python consumer lands them as Parquet in MinIO; Airflow orchestrates the `COPY INTO` load to Snowflake, dbt transforms the raw layer into marts, and Metabase renders the dashboards.*
+
 ```
 ┌──────────┐   WAL   ┌──────────┐ Topics ┌─────────┐ Parquet ┌───────┐  COPY   ┌───────────┐   SQL   ┌──────┐
 │ Postgres │────────▶│ Debezium │───────▶│  Kafka  │────────▶│ MinIO │────────▶│ Snowflake │────────▶│ dbt  │
@@ -75,21 +80,74 @@ This project fixes that problem. Here is what it does, in plain language:
 
 ---
 
-## 3. Pipeline in Action
+## 3. Data Modeling — From OLTP to OLAP
 
-The screenshots below walk through the pipeline end-to-end, using live data from a running environment. They follow the same order as the stage table in §2.
+A modern banking pipeline serves two very different workloads, and they need two very different data shapes. This project takes the bank's source data, modeled for **transactions**, and reshapes it into a model designed for **analytics**.
 
-### 3.1 Source — PostgreSQL (OLTP)
+|  | **OLTP — Source System** | **OLAP — Data Warehouse** |
+|---|---|---|
+| **System** | PostgreSQL | Snowflake |
+| **Job** | Run the bank — record every deposit, withdrawal, transfer | Answer questions — totals, trends, fraud, compliance |
+| **Optimised for** | Fast, safe writes (one row at a time) | Fast, wide reads (millions of rows aggregated) |
+| **Schema style** | Normalized (3NF) | Dimensional (star schema) |
+| **Why this shape?** | No duplicated data → no update anomalies | Few joins → fast queries for dashboards |
 
-Faker continuously writes synthetic `customers`, `accounts`, and `transactions` into the PostgreSQL source database. Every `INSERT` / `UPDATE` / `DELETE` is recorded in the Write-Ahead Log, which is what Debezium tails.
+### 3.1 OLTP Design — PostgreSQL Source (Normalized)
 
-![PostgreSQL accounts table populated by the Faker generator](<postgres database.png>)
+The bank's source database is fully normalized: `customers`, `accounts`, and `transactions` live in separate tables linked by foreign keys. This is the right shape for a system that has to record events safely and consistently while the bank is operating.
 
-*`accounts` table in PostgreSQL — synthetic savings and checking balances in ZMW, timestamped at the millisecond level.*
+![PostgreSQL OLTP data model — normalized customers, accounts, and transactions](<images/Snowflake model in postgress.png>)
+
+*Source schema in PostgreSQL — `customers (1) ──< accounts (1) ──< transactions`. A customer can own many accounts; an account can have many transactions. Each piece of customer information is stored once and only once.*
+
+**Why a normalized model fits the source:**
+- **No duplicated data.** A customer's address lives in one row of `customers` — an update touches one place, never many.
+- **Consistency under load.** Foreign keys and constraints stop concurrent writes from corrupting each other while deposits and transfers are being processed.
+- **Small, fast writes.** Every transaction is a tiny `INSERT` — exactly what the Write-Ahead Log and Debezium are tuned for.
+
+### 3.2 OLAP Design — Snowflake Warehouse (Star Schema)
+
+In the warehouse, the same data is reshaped into a **star schema**: one fact table at the centre (`fact_transactions`) surrounded by descriptive dimension tables (`dim_customers`, `dim_accounts`). dbt builds these models incrementally from the raw CDC layer that lands in Snowflake.
+
+![Snowflake OLAP star schema — fact_transactions surrounded by dim_customers and dim_accounts](<images/Star schema model.png>)
+
+*Warehouse schema in Snowflake — `fact_transactions` is the centre of the star, joined to `dim_customers` and `dim_accounts`. A question like "total deposits this month by account type" reads one fact table and one thin dimension — no chain of joins through a normalized schema.*
+
+**Why a star schema fits the warehouse:**
+- **Few joins → fast dashboards.** Most analytical questions are one fact + one or two dimensions, which Snowflake can answer in seconds even over millions of rows.
+- **Business-friendly columns.** Analysts see `customer_name`, `account_type`, and balances directly — they don't need to memorise foreign keys or write five-table joins.
+- **History via SCD Type 2.** The `dim_customers` snapshot keeps a row per change, so a transaction from last quarter is reported against the customer's address *at the time*, not today's — essential for accurate regulatory and audit trails.
+
+### 3.3 The Bridge — How OLTP Becomes OLAP
+
+| Step | What happens | Where |
+|---|---|---|
+| 1 | Every `INSERT` / `UPDATE` / `DELETE` is captured from the WAL | PostgreSQL → Debezium |
+| 2 | Each row-change event is buffered and durably stored | Kafka |
+| 3 | Events are written as Parquet, partitioned by table and date | MinIO (raw layer) |
+| 4 | Parquet files are bulk-loaded into a raw schema | Snowflake `BANKING.RAW` |
+| 5 | dbt models stage, join, and shape the raw rows into facts and dimensions | Snowflake `BANKING.MARTS` |
+| 6 | Metabase dashboards query the marts | Snowflake → Metabase |
+
+The end result: the bank's transactional system stays lean and fast, and analysts get a clean, query-friendly model purpose-built for reporting — without anyone running ad-hoc queries against the live banking database.
 
 ---
 
-### 3.2 Capture & Stream — Kafka Consumer → MinIO (Parquet)
+## 4. Pipeline in Action
+
+The screenshots below walk through the pipeline end-to-end, using live data from a running environment. They follow the same order as the stage table in §2.
+
+### 4.1 Source — PostgreSQL (OLTP)
+
+Faker continuously writes synthetic `customers`, `accounts`, and `transactions` into the PostgreSQL source database. Every `INSERT` / `UPDATE` / `DELETE` is recorded in the Write-Ahead Log, which is what Debezium tails.
+
+![PostgreSQL accounts table populated by the Faker generator](<images/postgres database.png>)
+
+*`accounts` table in PostgreSQL — synthetic savings and checking balances in ZMW, timestamped at the millisecond level. The schema behind it is the normalized model shown in §3.1.*
+
+---
+
+### 4.2 Capture & Stream — Kafka Consumer → MinIO (Parquet)
 
 The Python consumer subscribes to the Debezium topics (`banking.public.customers`, `banking.public.accounts`, `banking.public.transactions`), buffers messages, and uploads them to MinIO as date-partitioned Parquet files. Each line in the log below is one Parquet file landing in the raw zone.
 
@@ -99,7 +157,7 @@ The Python consumer subscribes to the Debezium topics (`banking.public.customers
 
 ---
 
-### 3.3 Land — MinIO Raw Zone
+### 4.3 Land — MinIO Raw Zone
 
 MinIO acts as the immutable "raw layer" of the lakehouse. Data is partitioned by table and by `date=YYYY-MM-DD`, which keeps Snowflake `COPY INTO` scans cheap and gives auditors a replayable archive.
 
@@ -109,7 +167,7 @@ MinIO acts as the immutable "raw layer" of the lakehouse. Data is partitioned by
 
 ---
 
-### 3.4 Orchestrate — Airflow DAGs
+### 4.4 Orchestrate — Airflow DAGs
 
 Two DAGs are registered: `minio_to_snowflake_banking` (every minute, loads Parquet into Snowflake) and `SCD2_snapshots` (daily, builds Type-2 history via dbt snapshots).
 
@@ -119,7 +177,7 @@ Two DAGs are registered: `minio_to_snowflake_banking` (every minute, loads Parqu
 
 ---
 
-### 3.5 Load — DAG Run: MinIO → Snowflake
+### 4.5 Load — DAG Run: MinIO → Snowflake
 
 The minute-level DAG has two tasks: `download_minio` pulls any new Parquet files, then `load_snowflake` executes a `COPY INTO` against the `BANKING.RAW` schema.
 
@@ -129,7 +187,7 @@ The minute-level DAG has two tasks: `download_minio` pulls any new Parquet files
 
 ---
 
-### 3.6 Alerting — Email on Failure
+### 4.6 Alerting — Email on Failure
 
 When a task fails (e.g. a Snowflake stage is missing or a permissions issue surfaces), Airflow's `on_failure_callback` sends a formatted email with the DAG, task, execution time, attempt number, and the exception.
 
@@ -139,7 +197,7 @@ When a task fails (e.g. a Snowflake stage is missing or a permissions issue surf
 
 ---
 
-### 3.7 Transform — dbt on Snowflake
+### 4.7 Transform — dbt on Snowflake
 
 Once raw CDC rows are in Snowflake, dbt shapes them into staging views and analytics marts. The query below is `fact_transactions.sql` — an incremental model joining `stg_transactions` with `stg_accounts` to attach `customer_id`, producing a clean, query-ready fact table.
 
@@ -149,7 +207,7 @@ Once raw CDC rows are in Snowflake, dbt shapes them into staging views and analy
 
 ---
 
-### 3.8 Visualize — Metabase Dashboard
+### 4.8 Visualize — Metabase Dashboard
 
 The final layer is a self-service BI dashboard built in Metabase, connected directly to the Snowflake marts. The "Banking Pipeline Overview" dashboard surfaces what data has landed end-to-end — confirming all transaction types and account types are flowing through the pipeline cleanly, and giving managers a no-code way to explore the warehouse.
 
@@ -166,7 +224,7 @@ The final layer is a self-service BI dashboard built in Metabase, connected dire
 
 ---
 
-## 4. Technology Choices
+## 5. Technology Choices
 
 Each tool in the stack was chosen for a specific engineering reason.
 
@@ -187,7 +245,7 @@ Each tool in the stack was chosen for a specific engineering reason.
 
 ---
 
-## 5. Tech Stack
+## 6. Tech Stack
 
 **Languages:** Python 3.11, SQL
 **Data Platforms:** PostgreSQL 15, Snowflake
@@ -200,7 +258,7 @@ Each tool in the stack was chosen for a specific engineering reason.
 
 ---
 
-## 6. Project Structure
+## 7. Project Structure
 
 ```
 Banking-data-engineering/
@@ -217,7 +275,7 @@ Banking-data-engineering/
 
 ---
 
-## 7. Getting Started
+## 8. Getting Started
 
 ### Prerequisites
 - Docker Desktop
@@ -253,11 +311,11 @@ Open Metabase at `http://localhost:3000` and complete the first-run setup wizard
 
 ---
 
-## 8. Business Applications — Zambian Banking Sector
+## 9. Business Applications — Zambian Banking Sector
 
 This architecture addresses concrete operational and regulatory needs within Zambia's financial services industry — commercial banks (Zanaco, FNB Zambia, Stanbic, Absa Zambia, Indo-Zambia) and mobile money operators (MTN MoMo, Airtel Money, Zamtel Kwacha).
 
-### 8.1 Use Cases
+### 9.1 Use Cases
 
 | Use Case | Business Impact |
 |----------|-----------------|
@@ -272,7 +330,7 @@ This architecture addresses concrete operational and regulatory needs within Zam
 | **Core banking modernisation** | CDC-based data extraction from legacy cores (Flexcube, T24, Bankfusion) without impacting source systems — a low-risk modernisation pathway. |
 | **SME credit scoring** | Clean transaction history feeds into credit models, addressing the gap left by limited credit bureau coverage in the SME segment. |
 
-### 8.2 Why This Architecture Suits the Zambian Context
+### 9.2 Why This Architecture Suits the Zambian Context
 
 - **Resilient to low bandwidth** — Kafka buffering and MinIO batching tolerate intermittent connectivity between branches in remote provinces.
 - **Cost-efficient** — Self-hosted MinIO combined with Snowflake's pay-per-query pricing minimises upfront capital expenditure.
