@@ -3,7 +3,7 @@
 **Pipeline:** Postgres → Debezium → Kafka → MinIO → Snowflake → dbt → Metabase
 
 The problem I wanted to solve
-Most banks still run analytics on yesterday's data. Fraud teams, compliance officers, and managers wait for overnight batch jobs that finish hours after the events they're meant to investigate. I wanted to build the architecture that fixes that the same event-driven pattern fintechs use for sub-minute analytics and run it end-to-end on my own machine.
+Most banks still run analytics on yesterday's data. Fraud teams, compliance officers, and managers wait for overnight batch jobs that finish hours after the events they're meant to investigate.
 
 **Orchestration:** Apache Airflow
 
