@@ -13,13 +13,13 @@ jobs:
       # Checkout repo
       # ------------------------
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # ------------------------
       # Python setup
       # ------------------------
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
@@ -38,7 +38,7 @@ jobs:
         run: |
           mkdir -p ~/.dbt
           cat > ~/.dbt/profiles.yml <<EOL
-          banking_dbt:
+          banking_dbt_v2:
             target: prod
             outputs:
               prod:
@@ -57,7 +57,7 @@ jobs:
       # ------------------------
       - name: dbt run + test (prod)
         run: |
-          cd banking_dbt
+          cd banking_dbt_v2
           dbt deps
           dbt run    # builds production models on Snowflake
           dbt test   # validates production data
