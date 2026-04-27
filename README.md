@@ -51,21 +51,7 @@ This project fixes that problem. Here is what it does, in plain language:
 
 ![End-to-end architecture diagram of the banking data pipeline](<images/Architecture design.png>)
 
-*Visual overview — Postgres (with Faker as a generator) feeds Debezium, which streams CDC events into Kafka. A Python consumer lands them as Parquet in MinIO; Airflow orchestrates the `COPY INTO` load to Snowflake, dbt transforms the raw layer into marts, and Metabase renders the dashboards.*
-
-```
-┌──────────┐   WAL   ┌──────────┐ Topics ┌─────────┐ Parquet ┌───────┐  COPY   ┌───────────┐   SQL   ┌──────┐
-│ Postgres │────────▶│ Debezium │───────▶│  Kafka  │────────▶│ MinIO │────────▶│ Snowflake │────────▶│ dbt  │
-└──────────┘         └──────────┘        └─────────┘         └───────┘         └───────────┘         └──────┘
-     ▲                                                             ▲                   │
-     │                                                             │                   │ SQL
-  Faker                                                        Airflow ────────────────┤
-(generator)                                                   (scheduler)              ▼
-                                                                                 ┌──────────┐
-                                                                                 │ Metabase │
-                                                                                 │ (charts) │
-                                                                                 └──────────┘
-```
+*Visual overview — Postgres (with Faker as a generator) feeds Debezium, which streams CDC events into Kafka. A Python consumer lands them as Parquet in MinIO; Airflow orchestrates the `COPY INTO` load to Snowflake, dbt transforms the raw layer into marts, and Metabase renders the dashboards.
 
 **Stages**
 
