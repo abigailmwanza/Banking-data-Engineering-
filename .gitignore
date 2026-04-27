@@ -1,0 +1,52 @@
+# Secrets — never commit .env files
+.env
+**/.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Data volumes
+docker/postgres/data/
+docker/minio/data/
+docker/logs/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Parquet temp files
+*.parquet
+
+# Airflow
+logs/
+# git actions cache
+.github/workflows/cache
+docker/minio/
+docker/postgres/
+docker/logs/
+docker/plugins/
+
+# DBT cache
+banking_dbt_v2/.dbt/
+banking_dbt_v2/analyses/
+banking_dbt_v2/logs/
+banking_dbt_v2/macros/
+banking_dbt_v2/seeds/
+banking_dbt_v2/target/
+banking_dbt/tests/
+
+.env
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+.DS_Store
+docker-compose.override.yml
+logs/
