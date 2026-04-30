@@ -1,31 +1,5 @@
 # Banking Data Engineering Pipeline — Real-Time CDC to Analytics
 
-**Pipeline:** Postgres → Debezium → Kafka → MinIO → Snowflake → dbt → Metabase
-
-The problem I wanted to solve
-Most banks still run analytics on yesterday's data. Fraud teams, compliance officers, and managers wait for overnight batch jobs that finish hours after the events they're meant to investigate.
-
-**Orchestration:** Apache Airflow
-
-**Visualization:** Metabase
-
----
-
-## Table of Contents
-
-1. [Overview](#1-overview)
-2. [Architecture](#2-architecture)
-3. [Data Modeling — From OLTP to OLAP](#3-data-modeling--from-oltp-to-olap)
-4. [Pipeline in Action](#4-pipeline-in-action)
-5. [CI/CD — Automated Testing & Deployment](#5-cicd--automated-testing--deployment)
-6. [Technology Choices](#6-technology-choices)
-7. [Tech Stack](#7-tech-stack)
-8. [Project Structure](#8-project-structure)
-9. [Getting Started](#9-getting-started)
-10. [Business Applications — Zambian Banking Sector](#10-business-applications--zambian-banking-sector)
-
----
-
 ## 1. Overview
 
 This project demonstrates a modern, event-driven data pipeline for a retail banking domain. Transactions generated in a PostgreSQL OLTP database are captured via Change Data Capture (CDC), streamed through Kafka, persisted as Parquet files in object storage, and loaded into Snowflake for analytical processing and transformation with dbt.
@@ -48,8 +22,23 @@ This project fixes that problem. Here is what it does, in plain language:
 
 **The short version:** this project turns a bank's raw transaction data into clean, trustworthy, real-time information that can be used for fraud detection, regulatory reporting, customer insights, and business decisions — without slowing down the bank's main systems.
 
+
 ---
 
+## Table of Contents
+
+1. [Overview](#1-overview)
+2. [Architecture](#2-architecture)
+3. [Data Modeling — From OLTP to OLAP](#3-data-modeling--from-oltp-to-olap)
+4. [Pipeline in Action](#4-pipeline-in-action)
+5. [CI/CD — Automated Testing & Deployment](#5-cicd--automated-testing--deployment)
+6. [Technology Choices](#6-technology-choices)
+7. [Tech Stack](#7-tech-stack)
+8. [Project Structure](#8-project-structure)
+9. [Getting Started](#9-getting-started)
+10. [Business Applications — Zambian Banking Sector](#10-business-applications--zambian-banking-sector)
+
+---
 ## 2. Architecture
 
 ![End-to-end architecture diagram of the banking data pipeline](<images/Architecture design.png>)
